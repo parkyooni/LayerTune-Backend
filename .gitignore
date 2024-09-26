@@ -1,0 +1,22 @@
+# Dependencies
+/node_modules
+
+# dotenv
+.env
+
+# Logs
+npm-debug.log*
+*.log
+
+# Editor directories and files
+.idea/
+.idea
+.vscode/
+.vscode
+
+# Optional npm cache directory
+.npm
+
+# Browser extensions specific
+*.pem
+*.crx

@@ -23,4 +23,7 @@ const LayerSchema = new mongoose.Schema({
   },
 });
 
+LayerSchema.index({ googleUserId: 1 });
+LayerSchema.index({ url: 1 });
+
 module.exports = mongoose.model("Layer", LayerSchema);

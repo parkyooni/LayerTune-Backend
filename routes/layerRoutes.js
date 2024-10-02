@@ -10,7 +10,7 @@ const {
 
 router.post("/save", saveLayer);
 router.get("/layers", getAllLayers);
-router.get("/:googleUserId", getLayersByUser);
+router.get("/user/:userId", getLayersByUser);
 router.get("/layer/:id", getLayerById);
 router.delete("/delete/:id", deleteLayer);
 

@@ -8,34 +8,46 @@ const normalizeUrl = (url) => {
 };
 
 exports.saveLayer = async (req, res) => {
-  const { name, layout, url, googleUserId } = req.body;
+  const { name, url, userId, changes, originalDOM, modifiedDOM } = req.body;
 
-  // 필수 값들이 존재하는지 검증
-  if (!name || !layout || layout.length === 0 || !url || !googleUserId) {
-    console.error("Missing required fields: ", {
-      name,
-      layout,
-      url,
-      googleUserId,
-    });
+  if (!url || !userId || !changes || changes.length === 0) {
     return res.status(400).json({
+      success: false,
       message:
-        "Missing required fields. Name, layout, URL, and Google User ID are required.",
+        "Missing required fields. URL, userId, and changes are required.",
     });
   }
 
   try {
     const newLayer = new Layer({
       name,
-      layout,
       url: normalizeUrl(url),
-      googleUserId,
+      userId,
+      changes: changes.map((change) => ({
+        ...change,
+        selector: change.selector,
+        selectorType: change.selectorType,
+        changeType: change.changeType,
+        contentType: change.contentType,
+        originalContent: change.originalContent,
+        newContent: change.newContent,
+        attributes: change.attributes,
+        styles: change.styles,
+      })),
     });
+
+    if (originalDOM) {
+      newLayer.saveStructureSnapshot(originalDOM);
+    }
+    if (modifiedDOM) {
+      newLayer.saveModifiedDOM(modifiedDOM);
+    }
+
     const savedLayer = await newLayer.save();
-    res.status(201).json(savedLayer);
+    res.status(201).json({ success: true, layer: savedLayer });
   } catch (error) {
     console.error("Error saving layer:", error);
-    res.status(500).json({ message: "Server Error", error: error.message });
+    res.status(500).json({ success: false, error: error.message });
   }
 };
 
@@ -46,12 +58,12 @@ exports.getLayersByUser = async (req, res) => {
 
   try {
     const [layers, total] = await Promise.all([
-      Layer.find({ googleUserId: req.params.googleUserId })
+      Layer.find({ userId: req.params.userId })
         .skip(skip)
         .limit(limit)
-        .sort({ timestamp: -1 })
+        .sort({ lastModified: -1 })
         .lean(),
-      Layer.countDocuments({ googleUserId: req.params.googleUserId }),
+      Layer.countDocuments({ userId: req.params.userId }),
     ]);
 
     res.status(200).json({
@@ -78,12 +90,41 @@ exports.getLayerById = async (req, res) => {
   try {
     const layer = await Layer.findById(req.params.id);
     if (!layer) {
-      return res.status(404).json({ message: "Layer not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Layer not found" });
     }
 
-    res.status(200).json(layer);
+    const responseLayer = layer.toObject();
+
+    if (layer.structureSnapshot) {
+      responseLayer.structureSnapshot = layer.getStructureSnapshot();
+    }
+    if (layer.modifiedDOM) {
+      responseLayer.modifiedDOM = layer.getModifiedDOM();
+    }
+
+    responseLayer.changes = Array.isArray(responseLayer.changes)
+      ? responseLayer.changes
+      : Object.values(responseLayer.changes || {});
+
+    try {
+      const jsonResponse = JSON.stringify({
+        success: true,
+        layer: responseLayer,
+      });
+      res.status(200).json(JSON.parse(jsonResponse));
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: "JSON parsing error",
+      });
+    }
   } catch (error) {
-    res.status(500).json({ message: "Server error", error: error.message });
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
   }
 };
 

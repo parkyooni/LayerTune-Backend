@@ -1,92 +1,62 @@
 const mongoose = require("mongoose");
-const zlib = require("zlib");
+const Schema = mongoose.Schema;
+const { saveSnapshotsIfLarge } = require("../utils/gridfsHelpers");
 
-const ChangeSchema = new mongoose.Schema({
-  selector: {
-    type: String,
-    required: true,
+const elementChangeSchema = new Schema({
+  elementId: { type: String, required: true },
+  newPosition: {
+    parentId: { type: String, default: null },
+    previousSiblingId: { type: String, default: null },
+    XPath: { type: String, required: true },
   },
-  selectorType: {
-    type: String,
-    enum: ["xpath", "css", "custom"],
-    required: true,
+  originalPosition: {
+    parentId: { type: String, default: null },
+    previousSiblingId: { type: String, default: null },
+    XPath: { type: String, required: true },
   },
-  changeType: {
-    type: String,
-    enum: ["remove", "modify", "style"],
-    required: true,
-  },
-  contentType: {
-    type: String,
-    enum: ["static", "dynamic"],
-    required: true,
-  },
-  originalContent: String,
-  newContent: String,
-  attributes: {
-    type: Map,
-    of: String,
-  },
-  styles: {
-    type: Map,
-    of: String,
-  },
-  timestamp: {
-    type: Date,
-    default: Date.now,
-  },
+  attributesChanged: [
+    {
+      attributeName: { type: String, required: true },
+      originalValue: { type: String, required: false, default: "" },
+      newValue: { type: String, required: false, default: "" },
+      originalStyles: { type: [String], required: false, default: [] },
+      newStyles: { type: [String], required: false, default: [] },
+    },
+  ],
+  changeType: { type: String, required: true },
 });
 
-const LayerSchema = new mongoose.Schema({
-  name: {
-    type: String,
-    required: true,
-  },
-  url: {
-    type: String,
-    required: true,
-  },
-  userId: {
-    type: String,
-    required: true,
-  },
-  changes: [ChangeSchema],
-  structureSnapshot: {
-    type: Buffer,
-  },
-  modifiedDOM: {
-    type: Buffer,
-  },
-  lastModified: {
-    type: Date,
-    default: Date.now,
-  },
+const domChangeSchema = new Schema({
+  userId: { type: String, required: true },
+  url: { type: String, required: true },
+  customName: { type: String, required: true },
+  originalDOMSnapshot: { type: Array, required: false },
+  modifiedDOMSnapshot: { type: Array, required: false },
+  originalDOMSnapshotId: { type: Schema.Types.ObjectId, required: false },
+  modifiedDOMSnapshotId: { type: Schema.Types.ObjectId, required: false },
+  elementChanges: [elementChangeSchema],
+  timestamp: { type: Date, default: Date.now },
 });
 
-LayerSchema.index({ userId: 1, url: 1 });
-
-LayerSchema.methods.saveStructureSnapshot = function (structure) {
-  this.structureSnapshot = zlib.gzipSync(
-    Buffer.from(JSON.stringify(structure))
+function filterDynamicAttributes(attributes) {
+  const dynamicAttributes = ["timestamp", "session-id", "counter"];
+  return attributes.filter(
+    (attr) => !dynamicAttributes.includes(attr.attributeName)
   );
-};
+}
 
-LayerSchema.methods.saveModifiedDOM = function (modifiedDOM) {
-  this.modifiedDOM = zlib.gzipSync(Buffer.from(JSON.stringify(modifiedDOM)));
-};
+domChangeSchema.pre("save", async function (next) {
+  const doc = this;
 
-LayerSchema.methods.getStructureSnapshot = function () {
-  if (!this.structureSnapshot) {
-    return null;
-  }
-  return JSON.parse(zlib.gunzipSync(this.structureSnapshot).toString());
-};
+  await saveSnapshotsIfLarge(doc);
 
-LayerSchema.methods.getModifiedDOM = function () {
-  if (!this.modifiedDOM) {
-    return null;
-  }
-  return JSON.parse(zlib.gunzipSync(this.modifiedDOM).toString());
-};
+  doc.elementChanges.forEach((change) => {
+    change.attributesChanged = filterDynamicAttributes(
+      change.attributesChanged
+    );
+  });
 
-module.exports = mongoose.model("Layer", LayerSchema);
+  next();
+});
+
+module.exports = mongoose.model("DOMChange", domChangeSchema);

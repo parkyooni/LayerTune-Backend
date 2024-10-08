@@ -1,145 +1,108 @@
-const Layer = require("../models/Layer");
+const DOMChange = require("../models/Layer");
 
-const normalizeUrl = (url) => {
-  const normalizedUrl = new URL(url);
-  normalizedUrl.hash = "";
-  normalizedUrl.search = "";
-  return normalizedUrl.href.replace(/\/$/, "");
-};
-
-exports.saveLayer = async (req, res) => {
-  const { name, url, userId, changes, originalDOM, modifiedDOM } = req.body;
-
-  if (!url || !userId || !changes || changes.length === 0) {
-    return res.status(400).json({
-      success: false,
-      message:
-        "Missing required fields. URL, userId, and changes are required.",
-    });
-  }
-
+exports.saveDomChange = async (req, res, next) => {
   try {
-    const newLayer = new Layer({
-      name,
-      url: normalizeUrl(url),
+    const {
+      url,
+      customName,
+      originalDOMSnapshot,
+      modifiedDOMSnapshot,
+      elementChanges,
       userId,
-      changes: changes.map((change) => ({
-        ...change,
-        selector: change.selector,
-        selectorType: change.selectorType,
-        changeType: change.changeType,
-        contentType: change.contentType,
-        originalContent: change.originalContent,
-        newContent: change.newContent,
-        attributes: change.attributes,
-        styles: change.styles,
-      })),
+    } = req.body;
+
+    console.log("Received elementChanges: ", elementChanges);
+
+    elementChanges.forEach((change) => {
+      change.attributesChanged = filterDynamicAttributes(
+        change.attributesChanged
+      );
     });
 
-    if (originalDOM) {
-      newLayer.saveStructureSnapshot(originalDOM);
-    }
-    if (modifiedDOM) {
-      newLayer.saveModifiedDOM(modifiedDOM);
-    }
-
-    const savedLayer = await newLayer.save();
-    res.status(201).json({ success: true, layer: savedLayer });
-  } catch (error) {
-    console.error("Error saving layer:", error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-};
-
-exports.getLayersByUser = async (req, res) => {
-  const page = parseInt(req.query.page) || 1;
-  const limit = parseInt(req.query.limit) || 10;
-  const skip = (page - 1) * limit;
-
-  try {
-    const [layers, total] = await Promise.all([
-      Layer.find({ userId: req.params.userId })
-        .skip(skip)
-        .limit(limit)
-        .sort({ lastModified: -1 })
-        .lean(),
-      Layer.countDocuments({ userId: req.params.userId }),
-    ]);
-
-    res.status(200).json({
-      layers,
-      currentPage: page,
-      totalPages: Math.ceil(total / limit),
-      totalItems: total,
+    const domChange = new DOMChange({
+      url,
+      customName,
+      originalDOMSnapshot,
+      modifiedDOMSnapshot,
+      elementChanges,
+      userId,
     });
+
+    await domChange.save();
+
+    res.status(201).json(domChange);
   } catch (error) {
-    res.status(500).json({ message: "Server Error", error: error.message });
+    next(error);
   }
 };
 
-exports.getAllLayers = async (req, res) => {
+exports.deleteDomChange = async (req, res, next) => {
   try {
-    const layers = await Layer.find().lean();
-    res.status(200).json(layers);
+    const { id } = req.params;
+
+    const deletedDomChange = await DOMChange.findByIdAndDelete(id);
+    if (!deletedDomChange) {
+      return res.status(404).json({ message: "DOM change not found" });
+    }
+
+    res.status(200).json({ message: "DOM change deleted successfully" });
   } catch (error) {
-    res.status(500).json({ message: "Server Error", error: error.message });
+    next(error);
   }
 };
 
-exports.getLayerById = async (req, res) => {
+exports.getDomChangesByGoogleId = async (req, res, next) => {
   try {
-    const layer = await Layer.findById(req.params.id);
-    if (!layer) {
+    const { googleId } = req.params;
+
+    const domChanges = await DOMChange.find({ userId: googleId });
+    if (domChanges.length === 0) {
       return res
         .status(404)
-        .json({ success: false, message: "Layer not found" });
+        .json({ message: "No DOM changes found for this Google ID" });
     }
 
-    const responseLayer = layer.toObject();
-
-    if (layer.structureSnapshot) {
-      responseLayer.structureSnapshot = layer.getStructureSnapshot();
-    }
-    if (layer.modifiedDOM) {
-      responseLayer.modifiedDOM = layer.getModifiedDOM();
-    }
-
-    responseLayer.changes = Array.isArray(responseLayer.changes)
-      ? responseLayer.changes
-      : Object.values(responseLayer.changes || {});
-
-    try {
-      const jsonResponse = JSON.stringify({
-        success: true,
-        layer: responseLayer,
-      });
-      res.status(200).json(JSON.parse(jsonResponse));
-    } catch (error) {
-      res.status(500).json({
-        success: false,
-        error: "JSON parsing error",
-      });
-    }
+    res.status(200).json(domChanges);
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+    next(error);
   }
 };
 
-exports.deleteLayer = async (req, res) => {
+exports.getDomChangesByUrl = async (req, res, next) => {
   try {
-    const deletedLayer = await Layer.findByIdAndDelete(req.params.id);
+    const { url } = req.params;
 
-    if (!deletedLayer) {
-      return res.status(404).json({ message: "Layer not found" });
+    const domChanges = await DOMChange.find({ url });
+    if (domChanges.length === 0) {
+      return res
+        .status(404)
+        .json({ message: "No DOM changes found for this URL" });
     }
 
-    res
-      .status(200)
-      .json({ message: "Layer deleted successfully", deletedLayer });
+    res.status(200).json(domChanges);
   } catch (error) {
-    res.status(500).json({ message: "Server Error", error: error.message });
+    next(error);
+  }
+};
+
+function filterDynamicAttributes(attributes) {
+  const dynamicAttributes = ["timestamp", "session-id", "counter"];
+  return attributes.filter(
+    (attr) => !dynamicAttributes.includes(attr.attributeName)
+  );
+}
+
+exports.checkExistingCustomName = async (req, res, next) => {
+  try {
+    const { customName } = req.params;
+    const existingDomChange = await DOMChange.findOne({ customName });
+
+    if (existingDomChange) {
+      return res.status(200).json({ exists: true });
+    } else {
+      return res.status(200).json({ exists: false });
+    }
+  } catch (error) {
+    next(error);
   }
 };

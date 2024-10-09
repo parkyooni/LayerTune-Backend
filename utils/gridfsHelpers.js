@@ -26,26 +26,13 @@ async function getSnapshotFromGridFS(snapshotId) {
 }
 
 async function saveSnapshotsIfLarge(doc) {
-  const originalSnapshotString = JSON.stringify(doc.originalDOMSnapshot);
   const modifiedSnapshotString = JSON.stringify(doc.modifiedDOMSnapshot);
-  const originalSnapshotSize = Buffer.byteLength(
-    originalSnapshotString,
-    "utf8"
-  );
   const modifiedSnapshotSize = Buffer.byteLength(
     modifiedSnapshotString,
     "utf8"
   );
 
   const THRESHOLD_SIZE = 16 * 1024 * 1024;
-
-  if (originalSnapshotSize > THRESHOLD_SIZE && !doc.originalDOMSnapshotId) {
-    const snapshotStream = gfsBucket.openUploadStream("originalSnapshot");
-    snapshotStream.end(originalSnapshotString);
-    const result = await snapshotStream;
-    doc.originalDOMSnapshotId = result._id;
-    doc.originalDOMSnapshot = undefined;
-  }
 
   if (modifiedSnapshotSize > THRESHOLD_SIZE && !doc.modifiedDOMSnapshotId) {
     const modifiedSnapshotStream =
@@ -54,10 +41,6 @@ async function saveSnapshotsIfLarge(doc) {
     const result = await modifiedSnapshotStream;
     doc.modifiedDOMSnapshotId = result._id;
     doc.modifiedDOMSnapshot = undefined;
-  }
-
-  if (originalSnapshotSize <= THRESHOLD_SIZE) {
-    doc.originalDOMSnapshotId = undefined;
   }
 
   if (modifiedSnapshotSize <= THRESHOLD_SIZE) {

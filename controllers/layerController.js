@@ -1,37 +1,55 @@
 const DOMChange = require("../models/Layer");
+const {
+  saveSnapshotsIfLarge,
+  getSnapshotFromGridFS,
+} = require("../utils/gridfsHelpers");
 
 exports.saveDomChange = async (req, res, next) => {
   try {
-    const {
-      url,
-      customName,
-      originalDOMSnapshot,
-      modifiedDOMSnapshot,
-      elementChanges,
-      userId,
-    } = req.body;
+    const { url, customName, modifiedDOMSnapshot, elementChanges, userId } =
+      req.body;
 
     console.log("Received elementChanges: ", elementChanges);
 
-    elementChanges.forEach((change) => {
-      change.attributesChanged = filterDynamicAttributes(
-        change.attributesChanged
-      );
-    });
+    const sanitizeData = (data) => {
+      if (typeof data === "object" && data !== null) {
+        Object.keys(data).forEach((key) => {
+          if (data[key] === "" || data[key] === undefined) {
+            data[key] = null;
+          } else if (typeof data[key] === "object") {
+            sanitizeData(data[key]);
+          }
+        });
+      }
+      return data;
+    };
+
+    const sanitizedElementChanges = elementChanges.map((change) =>
+      sanitizeData(change)
+    );
 
     const domChange = new DOMChange({
       url,
       customName,
-      originalDOMSnapshot,
       modifiedDOMSnapshot,
-      elementChanges,
+      elementChanges: sanitizedElementChanges,
       userId,
     });
 
+    await saveSnapshotsIfLarge(domChange);
+
     await domChange.save();
 
-    res.status(201).json(domChange);
+    const response = {
+      ...domChange.toObject(),
+      modifiedDOMSnapshot: domChange.modifiedDOMSnapshotId
+        ? "Stored in GridFS"
+        : domChange.modifiedDOMSnapshot,
+    };
+
+    res.status(201).json(response);
   } catch (error) {
+    console.error("Error in saveDomChange:", error);
     next(error);
   }
 };
@@ -39,12 +57,10 @@ exports.saveDomChange = async (req, res, next) => {
 exports.deleteDomChange = async (req, res, next) => {
   try {
     const { id } = req.params;
-
     const deletedDomChange = await DOMChange.findByIdAndDelete(id);
     if (!deletedDomChange) {
       return res.status(404).json({ message: "DOM change not found" });
     }
-
     res.status(200).json({ message: "DOM change deleted successfully" });
   } catch (error) {
     next(error);
@@ -62,8 +78,21 @@ exports.getDomChangesByGoogleId = async (req, res, next) => {
         .json({ message: "No DOM changes found for this Google ID" });
     }
 
-    res.status(200).json(domChanges);
+    const domChangesWithSnapshots = await Promise.all(
+      domChanges.map(async (change) => {
+        const changeObj = change.toObject();
+        if (changeObj.modifiedDOMSnapshotId) {
+          changeObj.modifiedDOMSnapshot = await getSnapshotFromGridFS(
+            changeObj.modifiedDOMSnapshotId
+          );
+        }
+        return changeObj;
+      })
+    );
+
+    res.status(200).json(domChangesWithSnapshots);
   } catch (error) {
+    console.error("Error in getDomChangesByGoogleId:", error);
     next(error);
   }
 };
@@ -84,13 +113,6 @@ exports.getDomChangesByUrl = async (req, res, next) => {
     next(error);
   }
 };
-
-function filterDynamicAttributes(attributes) {
-  const dynamicAttributes = ["timestamp", "session-id", "counter"];
-  return attributes.filter(
-    (attr) => !dynamicAttributes.includes(attr.attributeName)
-  );
-}
 
 exports.checkExistingCustomName = async (req, res, next) => {
   try {

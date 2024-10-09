@@ -1,34 +1,15 @@
 const DOMChange = require("../models/Layer");
+const { sanitizeElementChanges } = require("../utils");
 
 exports.saveDomChange = async (req, res, next) => {
   try {
-    const {
-      url,
-      customName,
-      originalDOMSnapshot,
-      modifiedDOMSnapshot,
-      elementChanges,
-      userId,
-    } = req.body;
+    const { elementChanges, ...rest } = req.body;
+    const sanitizedChanges = sanitizeElementChanges(elementChanges);
 
-    console.log("Received elementChanges: ", elementChanges);
-
-    elementChanges.forEach((change) => {
-      change.attributesChanged = filterDynamicAttributes(
-        change.attributesChanged
-      );
+    const domChange = await DOMChange.create({
+      ...rest,
+      elementChanges: sanitizedChanges,
     });
-
-    const domChange = new DOMChange({
-      url,
-      customName,
-      originalDOMSnapshot,
-      modifiedDOMSnapshot,
-      elementChanges,
-      userId,
-    });
-
-    await domChange.save();
 
     res.status(201).json(domChange);
   } catch (error) {
@@ -38,10 +19,9 @@ exports.saveDomChange = async (req, res, next) => {
 
 exports.deleteDomChange = async (req, res, next) => {
   try {
-    const { id } = req.params;
+    const deletedChange = await DOMChange.findByIdAndDelete(req.params.id);
 
-    const deletedDomChange = await DOMChange.findByIdAndDelete(id);
-    if (!deletedDomChange) {
+    if (!deletedChange) {
       return res.status(404).json({ message: "DOM change not found" });
     }
 
@@ -53,15 +33,7 @@ exports.deleteDomChange = async (req, res, next) => {
 
 exports.getDomChangesByGoogleId = async (req, res, next) => {
   try {
-    const { googleId } = req.params;
-
-    const domChanges = await DOMChange.find({ userId: googleId });
-    if (domChanges.length === 0) {
-      return res
-        .status(404)
-        .json({ message: "No DOM changes found for this Google ID" });
-    }
-
+    const domChanges = await DOMChange.find({ userId: req.params.googleId });
     res.status(200).json(domChanges);
   } catch (error) {
     next(error);
@@ -71,37 +43,22 @@ exports.getDomChangesByGoogleId = async (req, res, next) => {
 exports.getDomChangesByUrl = async (req, res, next) => {
   try {
     const { url } = req.params;
+    const { userId } = req.query;
 
-    const domChanges = await DOMChange.find({ url });
-    if (domChanges.length === 0) {
-      return res
-        .status(404)
-        .json({ message: "No DOM changes found for this URL" });
-    }
-
+    const domChanges = await DOMChange.find({ url, userId });
     res.status(200).json(domChanges);
   } catch (error) {
     next(error);
   }
 };
 
-function filterDynamicAttributes(attributes) {
-  const dynamicAttributes = ["timestamp", "session-id", "counter"];
-  return attributes.filter(
-    (attr) => !dynamicAttributes.includes(attr.attributeName)
-  );
-}
-
 exports.checkExistingCustomName = async (req, res, next) => {
   try {
-    const { customName } = req.params;
-    const existingDomChange = await DOMChange.findOne({ customName });
+    const existingChange = await DOMChange.findOne({
+      customName: req.params.customName,
+    });
 
-    if (existingDomChange) {
-      return res.status(200).json({ exists: true });
-    } else {
-      return res.status(200).json({ exists: false });
-    }
+    res.status(200).json({ exists: !!existingChange });
   } catch (error) {
     next(error);
   }
